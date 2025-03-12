@@ -41,6 +41,26 @@ def time_str_to_hours(time_str):
     except:
         return 0.0
 
+def parse_time(time_str):
+    """Parse a time string into a datetime object"""
+    if pd.isna(time_str) or time_str == 'None' or time_str == '':
+        return None
+        
+    try:
+        if isinstance(time_str, str):
+            time_str = time_str.strip()
+            
+            # Try different formats
+            if ':' in time_str:
+                return datetime.strptime(time_str, '%H:%M:%S')
+            else:
+                # Handle other formats
+                if len(time_str) == 4:  # HHMM
+                    return datetime.strptime(time_str, '%H%M')
+        return None
+    except:
+        return None
+
 def format_duration(hours):
     """Format hours as HH:MM:SS"""
     if hours == 0:
@@ -52,11 +72,27 @@ def format_duration(hours):
     seconds = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+def calculate_duration_from_times(inicio, fim):
+    """Calculate duration between two time strings in hours"""
+    start_time = parse_time(inicio)
+    end_time = parse_time(fim)
+    
+    if start_time is None or end_time is None:
+        return 0.0
+        
+    # Handle crossing midnight
+    if end_time < start_time:
+        end_time += timedelta(days=1)
+        
+    # Calculate duration in hours
+    duration = (end_time - start_time).total_seconds() / 3600
+    return duration
+
 def process_data(df):
     # Make a copy to avoid modifying the original
     df = df.copy()
     
-    # Display original columns for debugging
+    # Print columns for debugging
     st.write("Colunas originais:", df.columns.tolist())
     
     # Map column variations to standard names
@@ -84,40 +120,30 @@ def process_data(df):
     else:
         df['RPM'] = 0
     
-    # For duration calculation
-    if 'Total' in df.columns:
-        # Convert time strings to hours
-        df['Duração em horas'] = df['Total'].apply(time_str_to_hours)
+    # For duration calculation - ALWAYS calculate from Início and Fim columns
+    if 'Início' in df.columns and 'Fim' in df.columns:
+        # Calculate durations from start and end times
+        df['Duração em horas'] = df.apply(
+            lambda row: calculate_duration_from_times(row['Início'], row['Fim']), 
+            axis=1
+        )
         
-        # Display sample of duration conversion for debugging
-        st.write("Exemplo de conversão de duração:")
-        st.write(df[['Total', 'Duração em horas']].head())
+        # Also try from Total column as backup if available
+        if 'Total' in df.columns:
+            df['Duração do Total'] = df['Total'].apply(time_str_to_hours)
+            
+            # If the calculation from Início/Fim is 0 but Total has a value, use Total instead
+            zero_mask = (df['Duração em horas'] == 0) & (df['Duração do Total'] > 0)
+            df.loc[zero_mask, 'Duração em horas'] = df.loc[zero_mask, 'Duração do Total']
+            
+            # Display sample of duration calculation for comparison
+            st.write("Comparação de cálculos de duração:")
+            st.write(df[['Início', 'Fim', 'Total', 'Duração em horas', 'Duração do Total']].head(10))
+    elif 'Total' in df.columns:
+        # Fallback to Total if Início/Fim are not available
+        df['Duração em horas'] = df['Total'].apply(time_str_to_hours)
     else:
-        # Try to calculate from start and end times if available
-        if 'Início' in df.columns and 'Fim' in df.columns:
-            def calculate_duration(row):
-                try:
-                    # Parse start and end times
-                    if isinstance(row['Início'], str) and isinstance(row['Fim'], str):
-                        format_str = '%H:%M:%S' if ':' in row['Início'] else '%H%M'
-                        
-                        start = datetime.strptime(row['Início'], format_str)
-                        end = datetime.strptime(row['Fim'], format_str)
-                        
-                        # Handle crossing midnight
-                        if end < start:
-                            end += timedelta(days=1)
-                            
-                        # Calculate duration in hours
-                        duration = (end - start).total_seconds() / 3600
-                        return duration
-                    return 0
-                except:
-                    return 0
-                    
-            df['Duração em horas'] = df.apply(calculate_duration, axis=1)
-        else:
-            df['Duração em horas'] = 0
+        df['Duração em horas'] = 0
     
     # Determine operation codes and descriptions
     if 'Operação' not in df.columns:
@@ -196,12 +222,14 @@ def process_data(df):
         group = f"{op_code}{operation_counters[op_code]}"
         df.at[i, 'Grupo'] = group
     
-    # Display sample of grouped data
-    st.write("Exemplo de dados agrupados:")
-    st.write(df[['Operação', 'Op_Code', 'Grupo', 'Duração em horas']].head())
+    # Display sample of grouped data with durations
+    st.write("Dados agrupados com durações:")
+    st.write(df[['Operação', 'Op_Code', 'Grupo', 'Duração em horas']].head(10))
     
     # Group and calculate statistics
     result_data = []
+    
+    group_stats = {}
     
     for group, group_df in df[df['Grupo'] != ''].groupby('Grupo'):
         op_code = group[0]  # First character is the operation code
@@ -211,8 +239,19 @@ def process_data(df):
         min_topo = group_df['Topo'].min()
         max_base = group_df['Base'].max()
         
-        # Calculate total duration for this group
+        # Sum durations for this group
         total_duration = group_df['Duração em horas'].sum()
+        
+        # Display for debugging
+        st.write(f"Grupo {group}: Duração total = {total_duration} horas")
+        st.write(group_df[['Duração em horas']].sum())
+        
+        # Store group stats for debugging
+        group_stats[group] = {
+            "total_duration": total_duration,
+            "num_rows": len(group_df),
+            "durations": group_df['Duração em horas'].tolist()
+        }
         
         if total_duration > 0:
             # Weighted average for WOB and RPM
@@ -238,6 +277,9 @@ def process_data(df):
             'Duração': duration_str,
             'Duração em horas': round(total_duration, 6)
         })
+    
+    # Display group stats for debugging
+    st.write("Estatísticas por grupo:", group_stats)
     
     # Create result DataFrame
     result_df = pd.DataFrame(result_data)
@@ -267,10 +309,6 @@ def process_data(df):
     result_df['sort_key'] = result_df['Operação'].apply(lambda x: get_sort_key(x))
     result_df = result_df.sort_values('sort_key').drop('sort_key', axis=1)
     
-    # Display example of result data
-    st.write("Exemplo de resultados:")
-    st.write(result_df.head())
-    
     return result_df
 
 if uploaded_file is not None:
@@ -279,7 +317,15 @@ if uploaded_file is not None:
         if uploaded_file.name.endswith('.csv'):
             df_input = pd.read_csv(uploaded_file)
         else:
-            df_input = pd.read_excel(uploaded_file)
+            # Force reading types correctly for time columns
+            df_input = pd.read_excel(
+                uploaded_file,
+                dtype={
+                    'Início': str,
+                    'Fim': str,
+                    'Total': str
+                }
+            )
         
         st.subheader("Tabela de Entrada")
         st.dataframe(df_input)
@@ -290,19 +336,7 @@ if uploaded_file is not None:
         
         if df_output is not None:
             st.subheader("Tabela de Saída")
-            
-            # Apply custom formatting to make the duration stand out if it's zero
-            def highlight_zero_duration(val):
-                if val == '00:00:00':
-                    return 'background-color: yellow;'
-                return ''
-            
-            styled_df = df_output.style.applymap(
-                highlight_zero_duration, 
-                subset=['Duração']
-            )
-            
-            st.dataframe(styled_df)
+            st.dataframe(df_output)
             
             # Create download button
             buffer = io.BytesIO()
