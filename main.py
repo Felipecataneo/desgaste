@@ -228,9 +228,14 @@ def process_data(df):
    
     # Group and calculate statistics
     result_data = []
+    
+    # Armazenar a primeira linha de cada grupo para ordenação cronológica
+    first_rows_by_group = {}
+    for group, group_df in df[df['Grupo'] != ''].groupby('Grupo'):
+        if not group_df.empty:
+            first_rows_by_group[group] = group_df.iloc[0]
    
-    group_stats = {}
-   
+    # Group and calculate statistics
     for group, group_df in df[df['Grupo'] != ''].groupby('Grupo'):
         op_code = group[0]  # First character is the operation code
         op_num = group[1:]  # Remaining characters are the number
@@ -238,6 +243,11 @@ def process_data(df):
         # Calculate statistics
         min_topo = group_df['Topo'].min()
         max_base = group_df['Base'].max()
+        
+        # Obter o timestamp do início da primeira operação no grupo para ordenação
+        first_time_str = None
+        if group in first_rows_by_group and 'Início' in first_rows_by_group[group]:
+            first_time_str = first_rows_by_group[group]['Início']
        
         # Sum durations for this group
         total_duration = group_df['Duração em horas'].sum()
@@ -247,11 +257,14 @@ def process_data(df):
         st.write(group_df[['Duração em horas']].sum())
        
         # Store group stats for debugging
-        group_stats[group] = {
+        group_stats = {
             "total_duration": total_duration,
             "num_rows": len(group_df),
-            "durations": group_df['Duração em horas'].tolist()
+            "durations": group_df['Duração em horas'].tolist(),
+            "first_time": first_time_str
         }
+        
+        st.write(f"Grupo {group} stats:", group_stats)
        
         if total_duration > 0:
             # Weighted average for WOB and RPM
@@ -277,23 +290,23 @@ def process_data(df):
             'Duração': duration_str,
             'Duração em horas': round(total_duration, 6),
             'Op_Code': op_code,
-            'Op_Num': int(op_num) if op_num else 0
+            'Op_Num': int(op_num) if op_num else 0,
+            'First_Time': first_time_str  # Armazenar para ordenação
         })
-   
-    # Display group stats for debugging
-    st.write("Estatísticas por grupo:", group_stats)
    
     # Create result DataFrame
     result_df = pd.DataFrame(result_data)
-   
-    # Modificação: Ordenar pelo critério de profundidade (topo ou base)
-    # Primeiro ordenamos por Base (em ordem decrescente)
-    # Em caso de empate, ordenamos por Topo (também em ordem decrescente)
-    result_df = result_df.sort_values(by=['Base', 'Topo'], ascending=[False, False])
+    
+    # Converter a coluna First_Time para um formato que possa ser ordenado
+    # Criar uma coluna auxiliar de timestamp para ordenação
+    result_df['Timestamp'] = pd.to_datetime(result_df['First_Time'], format='%H:%M:%S', errors='coerce')
+    
+    # Ordenar pelo timestamp de início
+    result_df = result_df.sort_values(by=['Timestamp'], ascending=True)
     
     # Remover colunas auxiliares antes de retornar
     if 'Op_Code' in result_df.columns:
-        result_df = result_df.drop(['Op_Code', 'Op_Num'], axis=1)
+        result_df = result_df.drop(['Op_Code', 'Op_Num', 'First_Time', 'Timestamp'], axis=1)
    
     return result_df
 
