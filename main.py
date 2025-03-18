@@ -296,18 +296,32 @@ def process_data(df):
    
     # Create result DataFrame
     result_df = pd.DataFrame(result_data)
-    
+
+    # Abordagem de ordenação combinada:
+    # 1. Ordenar primeiro por profundidade (Topo) - operações mais rasas primeiro
+    # 2. Para operações na mesma profundidade, ordenar pelo número da operação
+    # 3. Se os dois critérios falharem, usar o timestamp como fallback
+
+    # Garantir que Op_Num seja numérico
+    result_df['Op_Num'] = pd.to_numeric(result_df['Op_Num'], errors='coerce').fillna(0).astype(int)
+
     # Converter a coluna First_Time para um formato que possa ser ordenado
-    # Criar uma coluna auxiliar de timestamp para ordenação
     result_df['Timestamp'] = pd.to_datetime(result_df['First_Time'], format='%H:%M:%S', errors='coerce')
-    
-    # Ordenar pelo timestamp de início
-    result_df = result_df.sort_values(by=['Timestamp'], ascending=True)
-    
+
+    # Ordenação em várias etapas
+    result_df = result_df.sort_values(by=['Topo', 'Op_Num', 'Timestamp'], ascending=[True, True, True])
+
+    # Alternativa: Criar uma ordem personalizada baseada no tipo de operação
+    operation_order = {'C': 1, 'R': 2, 'K': 3, 'B': 4}  # Circulação, Perfuração, Corte de Cimento, Backreaming
+    result_df['Op_Order'] = result_df['Op_Code'].map(operation_order).fillna(99)
+
+    # Ordenar por Topo e depois pela ordem de operação e número
+    result_df = result_df.sort_values(by=['Topo', 'Op_Order', 'Op_Num'], ascending=[True, True, True])
+
     # Remover colunas auxiliares antes de retornar
     if 'Op_Code' in result_df.columns:
-        result_df = result_df.drop(['Op_Code', 'Op_Num', 'First_Time', 'Timestamp'], axis=1)
-   
+        result_df = result_df.drop(['Op_Code', 'Op_Num', 'First_Time', 'Timestamp', 'Op_Order'], axis=1)
+
     return result_df
 
 if uploaded_file is not None:
